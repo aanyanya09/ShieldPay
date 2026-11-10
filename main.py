@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 import database as db
 from rules import (
     RULE_VERSION,
@@ -39,6 +40,7 @@ from token_service import (
 )
 from paypal_client import PayPalClient
 from security import rate_limit
+from routes_extra import router as extra_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("shieldpay")
@@ -60,6 +62,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+app.include_router(extra_router)
 
 app.add_middleware(
     CORSMiddleware,
