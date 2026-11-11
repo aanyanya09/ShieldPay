@@ -82,7 +82,9 @@ class PayPalClient:
         amount_cents: int,
         currency: str,
         description: str,
-        seller_email: Optional[str] = None
+        seller_email: Optional[str] = None,
+        return_url: Optional[str] = None,
+        cancel_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a PayPal order via Orders v2 API (§4, B1).
@@ -122,6 +124,18 @@ class PayPalClient:
                 }
             ]
         }
+
+        if return_url and cancel_url:
+            payload["payment_source"] = {
+                "paypal": {
+                    "experience_context": {
+                        "return_url": return_url,
+                        "cancel_url": cancel_url,
+                        "user_action": "PAY_NOW",
+                        "shipping_preference": "NO_SHIPPING",
+                    }
+                }
+            }
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -170,4 +184,26 @@ class PayPalClient:
             if resp.status_code not in (200, 201):
                 logger.error("PayPal capture failed: %s %s", resp.status_code, resp.text)
                 raise RuntimeError(f"PayPal capture failed: {resp.text}")
+            return resp.json()
+    @staticmethod
+    def approval_url(order: Dict[str, Any]) -> Optional[str]:
+        for link in order.get("links", []):
+            if link.get("rel") in ("payer-action", "approve"):
+                return link.get("href")
+        return None
+
+    async def get_order(self, paypal_order_id: str) -> Dict[str, Any]:
+        """Read an order's status from PayPal (APPROVED means the buyer approved)."""
+        if self.is_mock:
+            return {"id": paypal_order_id, "status": "APPROVED", "simulated": True}
+        if not self.is_configured:
+            raise RuntimeError("PayPal credentials are not configured.")
+        token = await self.get_access_token()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/v2/checkout/orders/{paypal_order_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"PayPal get order failed: {resp.status_code}")
             return resp.json()

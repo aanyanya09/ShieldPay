@@ -10,7 +10,10 @@ sys.path.insert(0, str(ROOT))
 _TMP = tempfile.mkdtemp(prefix="shieldpay_tests_")
 os.environ["DB_PATH"] = os.path.join(_TMP, "test.db")
 os.environ["ADMIN_PASSWORD"] = "test-admin-password"
-os.environ.setdefault("PAYPAL_MODE", "mock")
+os.environ["PAYPAL_MODE"] = "mock"
+os.environ["TOKEN_SECRET"] = "t" * 40
+os.environ["PAYPAL_CLIENT_ID"] = "mock-client-id"
+os.environ["PAYPAL_SECRET"] = "mock-secret"
 
 import pytest
 from fastapi.testclient import TestClient

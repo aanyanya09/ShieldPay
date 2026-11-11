@@ -130,7 +130,7 @@ def verify_capture_token(
         payload_bytes = _base64url_decode(payload_b64)
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        raise TokenInvalidError("Cannot decode token payload:")
+        raise TokenInvalidError("Cannot decode token payload.")
 
     required = ["order_id", "amount_cents", "currency", "seller_email", "outcome", "iat", "exp", "jti"]
     for field in required:

@@ -183,13 +183,17 @@ async def create_order(payload: OrderCreateRequest):
 
     order_id = f"ord_{uuid.uuid4().hex[:12]}"
 
+    app_url = os.getenv("APP_URL", "http://localhost:5173")
+    
     try:
         paypal_order = await paypal_client.create_order(
             order_id=order_id,
             amount_cents=product["price_cents"],
             currency=product["currency"],
             description=product["name"],
-            seller_email=product["seller_email"]
+            seller_email=product["seller_email"],
+            return_url=f"{app_url}/return",
+            cancel_url=f"{app_url}/cancel",
         )
     except Exception as e:
         logger.error("PayPal order creation failed: %s", e)
@@ -214,6 +218,7 @@ async def create_order(payload: OrderCreateRequest):
     return {
         "order_id": order_id,
         "paypal_order_id": paypal_order_id,
+        "approval_url": paypal_client.approval_url(paypal_order),
         "product_id": product["product_id"],
         "product_name": product["name"],
         "amount_cents": product["price_cents"],
@@ -417,6 +422,17 @@ async def capture_payment(payload: CaptureRequest):
     assessment = db.get_assessment_by_jti(claims["jti"])
     if not assessment or assessment["order_id"] != order["order_id"]:
         raise HTTPException(status_code=400, detail="Invalid token.")
+
+    # Check 8b: the buyer must have approved the order in PayPal.
+    # Done before the token is marked used, so an unapproved order
+    # does not burn the token.
+    try:
+        pp_order = await paypal_client.get_order(order["paypal_order_id"])
+    except Exception as e:
+        logger.error("Could not read PayPal order %s: %s", order["order_id"], e)
+        raise HTTPException(status_code=502, detail="Could not check the PayPal order.")
+    if pp_order.get("status") != "APPROVED":
+        raise HTTPException(status_code=409, detail="Approve the payment in PayPal first.")
 
     # Check 9: use the token only once. This update is atomic.
     if not db.mark_jti_used(claims["jti"]):
