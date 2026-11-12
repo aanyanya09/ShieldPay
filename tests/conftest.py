@@ -14,6 +14,7 @@ os.environ["PAYPAL_MODE"] = "mock"
 os.environ["TOKEN_SECRET"] = "t" * 40
 os.environ["PAYPAL_CLIENT_ID"] = "mock-client-id"
 os.environ["PAYPAL_SECRET"] = "mock-secret"
+os.environ["GEMINI_API_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,3 +40,14 @@ def client():
 
     with TestClient(app) as c:
         yield c
+
+@pytest.fixture(autouse=True)
+def fake_ai(monkeypatch):
+    """Tests must never call Gemini. Use a simple offline stand-in."""
+    import main as app_main
+
+    async def offline_analyze(message):
+        cats = app_main.analyze_message_categories(message)
+        return {"categories": cats, "evidence_quotes": [], "language": "en"}
+
+    monkeypatch.setattr(app_main, "analyze_message", offline_analyze)

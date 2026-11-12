@@ -41,6 +41,7 @@ from token_service import (
 from paypal_client import PayPalClient
 from security import rate_limit
 from routes_extra import router as extra_router
+from ai_message_checker import analyze_message, get_model_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("shieldpay")
@@ -164,8 +165,12 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "ShieldPay API",
-        "paypal_mode": paypal_client.mode
+        "paypal_mode": paypal_client.mode,
+        "ai_provider": "Google Gemini",
+        "ai_model": get_model_name(),
+        "ai_configured": bool(os.getenv("GEMINI_API_KEY", "").strip())
     }
+    
 
 
 @app.get("/api/products")
@@ -295,12 +300,22 @@ async def assess_risk(payload: AssessRequest):
     message = payload.message or ""
     has_message = bool(message.strip())
     scam_categories = []
+    evidence_quotes = []
+    message_language = "unknown"
+    message_check_failed = False
     if has_message:
-        scam_categories = analyze_message_categories(message)
-        for cat in scam_categories:
-            exp = ALLOWED_CATEGORIES.get(cat)
-            if exp and exp not in reasons:
-                reasons.append(exp)
+        ai_result = await analyze_message(message)
+        if ai_result is None:
+            message_check_failed = True
+            not_checked.append("Message could not be checked.")
+        else:
+            scam_categories = ai_result["categories"]
+            evidence_quotes = ai_result["evidence_quotes"]
+            message_language = ai_result["language"]
+            for cat in scam_categories:
+                exp = ALLOWED_CATEGORIES.get(cat)
+                if exp and exp not in reasons:
+                    reasons.append(exp)
     else:
         not_checked.append("No conversation message provided for text analysis.")
 
@@ -316,7 +331,7 @@ async def assess_risk(payload: AssessRequest):
     # 6. Confidence determination (§3, L2)
     confidence = determine_confidence(
         order_checked=True,
-        message_checked=has_message,
+        message_checked=(has_message and not message_check_failed),
         questions_answered=questions_answered,
         brand_or_report_hit=(report_hit or brand_hit),
         confirmed_report_found=(confirmed_reports > 0)
@@ -324,6 +339,10 @@ async def assess_risk(payload: AssessRequest):
 
     # 7. Outcome determination (§3, L2, L3)
     outcome, action = determine_outcome(score, confidence)
+    # A failed message check is never treated as clean. Keep High risk if hard
+    # signals already say so, otherwise the result is Unknown (warn and confirm).
+    if message_check_failed and outcome != "High risk":
+        outcome, action = "Unknown", "Warn, message could not be checked"
 
     # One mistaken "Yes" re-answer rule (§3, L4)
     # A single mistaken "Yes" allows one re-answer; confirmed report does not.
@@ -374,8 +393,17 @@ async def assess_risk(payload: AssessRequest):
         "not_checked": not_checked,
         "wait_seconds": wait_seconds if outcome == "Suspicious" else 0,
         "can_reanswer": can_reanswer,
-        "token": token
+        "token": token,
+        "message_check_failed": message_check_failed,
+        "message_analysis": {
+            "provider": "Google Gemini",
+            "model": get_model_name(),
+            "categories": scam_categories,
+            "evidence_quotes": evidence_quotes,
+            "language": message_language,
+        } if has_message and not message_check_failed else None,
     }
+    
 
 @app.post("/api/capture", dependencies=[Depends(rate_limit("capture", 20, 3600))])
 async def capture_payment(payload: CaptureRequest):
