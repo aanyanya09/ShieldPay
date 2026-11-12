@@ -11,7 +11,7 @@ It combines AI-based risk analysis with PayPal payment processing to help users 
 
 **Deployed Application URL:**https://shieldpay-frontend-42oz.onrender.com/
 
-**GitHub Repository:** https://github.com/aanyanya09/protect-pay
+**GitHub Repository:** https://github.com/aanyanya09/ShieldPay.git
 
 ---
 
