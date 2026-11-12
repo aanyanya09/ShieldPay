@@ -65,12 +65,17 @@ app = FastAPI(
 
 app.include_router(extra_router)
 
+_frontend_origins = [
+    o.strip().rstrip("/")
+    for o in os.getenv("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_frontend_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Password"],
 )
 
 MAX_BODY_BYTES = 10_000
@@ -106,6 +111,7 @@ def get_token_secret() -> str:
 
 class OrderCreateRequest(BaseModel):
     product_id: str = Field(..., description="The ID of the product from our database catalog")
+    quantity: int = Field(default=1, ge=1, le=10, description="Quantity, 1 to 10")
 
 
 class AssessRequest(BaseModel):
@@ -183,17 +189,20 @@ async def create_order(payload: OrderCreateRequest):
 
     order_id = f"ord_{uuid.uuid4().hex[:12]}"
 
-    app_url = os.getenv("APP_URL", "http://localhost:5173")
+    amount_cents = product["price_cents"] * payload.quantity
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return_url = f"{frontend_url}/?checkout=return&order_id={order_id}"
+    cancel_url = f"{frontend_url}/?checkout=cancel&order_id={order_id}"
     
     try:
         paypal_order = await paypal_client.create_order(
             order_id=order_id,
-            amount_cents=product["price_cents"],
+            amount_cents=amount_cents,
+            description=f"{product['name']} (x{payload.quantity})",
             currency=product["currency"],
-            description=product["name"],
             seller_email=product["seller_email"],
-            return_url=f"{app_url}/return",
-            cancel_url=f"{app_url}/cancel",
+            return_url=return_url,
+            cancel_url=cancel_url,
         )
     except Exception as e:
         logger.error("PayPal order creation failed: %s", e)
@@ -208,12 +217,12 @@ async def create_order(payload: OrderCreateRequest):
         order_id=order_id,
         paypal_order_id=paypal_order_id,
         product_id=product["product_id"],
-        amount_cents=product["price_cents"],
+        amount_cents=amount_cents,
         currency=product["currency"],
         status="CREATED"
     )
 
-    db.log_audit("ORDER_CREATED", order_id, f"Product {product['product_id']}, Amount: {product['price_cents']}")
+    db.log_audit("ORDER_CREATED", order_id, f"Product {product['product_id']}, Quantity: {payload.quantity}, Amount: {amount_cents}")
 
     return {
         "order_id": order_id,
@@ -221,9 +230,11 @@ async def create_order(payload: OrderCreateRequest):
         "approval_url": paypal_client.approval_url(paypal_order),
         "product_id": product["product_id"],
         "product_name": product["name"],
-        "amount_cents": product["price_cents"],
+        "amount_cents": amount_cents,
         "currency": product["currency"],
         "seller_email": product["seller_email"],
+        "quantity": payload.quantity,
+        "simulated": bool(paypal_order.get("simulated", False)),
         "status": "CREATED"
     }
 
